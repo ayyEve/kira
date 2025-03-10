@@ -1,10 +1,10 @@
 mod renderer_with_cpu_usage;
 mod stream_manager;
 
-use std::sync::Mutex;
+use std::sync::{ Arc, Mutex };
 
 use renderer_with_cpu_usage::RendererWithCpuUsage;
-use rtrb::Consumer;
+use ringbuf::{ HeapRb, Cons as Consumer, consumer::Consumer as _ };
 use stream_manager::{StreamManager, StreamManagerController};
 
 use crate::backend::{Backend, Renderer};
@@ -33,7 +33,7 @@ pub struct CpalBackend {
 	/// Whether the device was specified by the user.
 	custom_device: bool,
 	buffer_size: BufferSize,
-	cpu_usage_consumer: Option<Mutex<Consumer<f32>>>,
+	cpu_usage_consumer: Option<Mutex<Consumer<Arc<HeapRb<f32>>>>>,
 }
 
 impl CpalBackend {
@@ -53,8 +53,7 @@ impl CpalBackend {
 			.unwrap()
 			.get_mut()
 			.unwrap()
-			.pop()
-			.ok()
+			.try_pop()
 	}
 }
 

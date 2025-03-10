@@ -6,7 +6,10 @@ use std::{sync::Arc, time::Duration};
 use crate::sound::{EndPosition, IntoOptionalRegion, PlaybackPosition, Region, SoundData};
 use crate::{Tween, Value};
 use crate::{Decibels, Panning, PlaybackRate, StartTime};
-use rtrb::RingBuffer;
+
+use ringbuf::{ Cons, Prod, HeapRb as RingBuffer };
+type Producer<T> = Prod<Arc<RingBuffer<T>>>;
+type Consumer<T> = Cons<Arc<RingBuffer<T>>>;
 
 use super::sound::Shared;
 use super::{command_writers_and_readers, StreamingSoundHandle, StreamingSoundSettings};
@@ -368,7 +371,11 @@ impl<Error: Send + 'static> StreamingSoundData<Error> {
 	> {
 		let (command_writers, command_readers, decode_scheduler_command_readers) =
 			command_writers_and_readers();
-		let (error_producer, error_consumer) = RingBuffer::new(ERROR_BUFFER_CAPACITY);
+
+		let rb = Arc::new(RingBuffer::new(ERROR_BUFFER_CAPACITY));
+		let error_producer = Producer::new(rb.clone());
+		let error_consumer = Consumer::new(rb);
+
 		let sample_rate = self.decoder.sample_rate();
 		let shared = Arc::new(Shared::new());
 		let (scheduler, frame_consumer) = DecodeScheduler::new(

@@ -10,7 +10,10 @@ use kira::{
 	track::TrackBuilder,
 	AudioManager, AudioManagerSettings, Frame,
 };
-use rtrb::{Consumer, Producer, RingBuffer};
+
+use ringbuf::{ Cons, Prod, HeapRb as RingBuffer, producer::Producer as _, consumer::Consumer as _ };
+type Producer<T> = Prod<Arc<RingBuffer<T>>>;
+type Consumer<T> = Cons<Arc<RingBuffer<T>>>;
 
 struct TestEffect {
 	sample_rate: Arc<AtomicU32>,
@@ -27,7 +30,7 @@ impl Effect for TestEffect {
 	}
 
 	fn process(&mut self, _input: &mut [Frame], dt: f64, _info: &Info) {
-		self.dt_producer.push(dt).unwrap();
+		self.dt_producer.try_push(dt).ok().unwrap();
 	}
 }
 
@@ -42,7 +45,10 @@ impl EffectBuilder for TestEffectBuilder {
 	type Handle = TestEffectHandle;
 
 	fn build(self) -> (Box<dyn Effect>, Self::Handle) {
-		let (dt_producer, dt_consumer) = RingBuffer::new(100);
+
+		let rb = Arc::new(RingBuffer::new(100));
+		let dt_producer = Producer::new(rb.clone());
+		let dt_consumer = Consumer::new(rb.clone());
 		let sample_rate = Arc::new(AtomicU32::new(0));
 		(
 			Box::new(TestEffect {
@@ -76,9 +82,9 @@ fn change_sample_rate() {
 	backend.on_start_processing();
 	assert_eq!(effect_handle.sample_rate.load(Ordering::SeqCst), 100);
 	backend.process();
-	assert_eq!(effect_handle.dt_consumer.pop(), Ok(1.0 / 100.0));
+	assert_eq!(effect_handle.dt_consumer.try_pop(), Some(1.0 / 100.0));
 	backend.set_sample_rate(200);
 	assert_eq!(effect_handle.sample_rate.load(Ordering::SeqCst), 200);
 	backend.process();
-	assert_eq!(effect_handle.dt_consumer.pop(), Ok(1.0 / 200.0));
+	assert_eq!(effect_handle.dt_consumer.try_pop(), Some(1.0 / 200.0));
 }

@@ -17,7 +17,9 @@ use crate::{
 	Tween,
 	Decibels, Panning, Parameter, PlaybackRate, StartTime,
 };
-use rtrb::Consumer;
+
+use ringbuf::{ Cons, HeapRb as RingBuffer, consumer::Consumer as _, traits::Observer };
+type Consumer<T> = Cons<Arc<RingBuffer<T>>>;
 
 use super::{CommandReaders, StreamingSoundSettings};
 
@@ -126,11 +128,10 @@ impl StreamingSound {
 	}
 
 	fn update_current_frame(&mut self) {
-		let chunk = self
-			.frame_consumer
-			.read_chunk(self.frame_consumer.slots().min(4))
-			.unwrap();
-		let (a, b) = chunk.as_slices();
+		let (a, b) = self.frame_consumer.as_slices();
+		let a = &a[..4.min(a.len())];
+		let b = &b[..4.min(b.len())];
+
 		let mut iter = a.iter().chain(b.iter());
 		if let Some(TimestampedFrame { index, .. }) = iter.nth(1) {
 			self.current_frame = *index;
@@ -140,11 +141,16 @@ impl StreamingSound {
 	#[must_use]
 	fn next_frames(&mut self) -> [Frame; 4] {
 		let mut frames = [Frame::ZERO; 4];
-		let chunk = self
-			.frame_consumer
-			.read_chunk(self.frame_consumer.slots().min(4))
-			.unwrap();
-		let (a, b) = chunk.as_slices();
+		// let chunk = self
+		// 	.frame_consumer
+		// 	.read_chunk(self.frame_consumer.slots().min(4))
+		// 	.unwrap();
+		// let (a, b) = chunk.as_slices();
+
+		let (a, b) = self.frame_consumer.as_slices();
+		let a = &a[..4.min(a.len())];
+		let b = &b[..4.min(b.len())];
+
 		let mut iter = a.iter().chain(b.iter());
 		for frame in &mut frames {
 			*frame = iter
@@ -236,7 +242,7 @@ impl Sound for StreamingSound {
 		// pause playback while waiting for audio data. the first frame
 		// in the ringbuffer is the previous frame, so we need to make
 		// sure there's at least 2 before we continue playing.
-		if self.frame_consumer.slots() < 2 && !self.shared.reached_end() {
+		if self.frame_consumer.occupied_len() < 2 && !self.shared.reached_end() {
 			out.fill(Frame::ZERO);
 			return;
 		}
@@ -262,7 +268,7 @@ impl Sound for StreamingSound {
 			self.fractional_position += self.sample_rate as f64 * playback_rate.0.max(0.0) * dt;
 			while self.fractional_position >= 1.0 {
 				self.fractional_position -= 1.0;
-				self.frame_consumer.pop().ok();
+				self.frame_consumer.try_pop();
 			}
 			if self.shared.reached_end() && self.frame_consumer.is_empty() {
 				self.playback_state_manager.mark_as_stopped();

@@ -8,7 +8,9 @@ use crate::{
 	sound::{IntoOptionalRegion, PlaybackState},
 	Decibels, Panning, PlaybackRate, StartTime, Tween,
 };
-use rtrb::Consumer;
+
+use ringbuf::{ Cons, HeapRb as RingBuffer, consumer::Consumer as _ };
+type Consumer<T> = Cons<Arc<RingBuffer<T>>>;
 
 use super::{sound::Shared, CommandWriters};
 
@@ -328,7 +330,7 @@ impl<Error> StreamingSoundHandle<Error> {
 	/// Returns an error that occurred while decoding audio, if any.
 	#[must_use]
 	pub fn pop_error(&mut self) -> Option<Error> {
-		self.error_consumer.pop().ok()
+		self.error_consumer.try_pop()
 	}
 }
 

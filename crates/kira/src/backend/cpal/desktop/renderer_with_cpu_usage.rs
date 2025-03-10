@@ -1,9 +1,15 @@
 use std::{
 	ops::{Deref, DerefMut},
 	time::Instant,
+	sync::Arc,
 };
 
-use rtrb::{Consumer, Producer, RingBuffer};
+use ringbuf::{ 
+	Cons as Consumer, 
+	Prod as Producer, 
+	HeapRb as RingBuffer, 
+	producer::Producer as _ 
+};
 
 use crate::backend::Renderer;
 
@@ -11,13 +17,15 @@ const CPU_USAGE_RINGBUFFER_CAPACITY: usize = 100;
 
 pub struct RendererWithCpuUsage {
 	renderer: Renderer,
-	cpu_usage_producer: Producer<f32>,
+	cpu_usage_producer: Producer<Arc<RingBuffer<f32>>>,
 }
 
 impl RendererWithCpuUsage {
-	pub fn new(renderer: Renderer) -> (Self, Consumer<f32>) {
-		let (cpu_usage_producer, cpu_usage_consumer) =
-			RingBuffer::new(CPU_USAGE_RINGBUFFER_CAPACITY);
+	pub fn new(renderer: Renderer) -> (Self, Consumer<Arc<RingBuffer<f32>>>) {
+		let buf = Arc::new(RingBuffer::new(CPU_USAGE_RINGBUFFER_CAPACITY));
+		let cpu_usage_producer = Producer::new(buf.clone());
+		let cpu_usage_consumer = Consumer::new(buf);
+
 		(
 			Self {
 				renderer,
@@ -34,7 +42,7 @@ impl RendererWithCpuUsage {
 		let end_time = Instant::now();
 		let process_duration = end_time - start_time;
 		let cpu_usage = process_duration.as_secs_f32() / allotted_time;
-		self.cpu_usage_producer.push(cpu_usage).ok();
+		self.cpu_usage_producer.try_push(cpu_usage).ok();
 	}
 }
 

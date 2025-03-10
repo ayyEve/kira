@@ -1,6 +1,9 @@
 use std::ops::{Deref, DerefMut};
 
-use rtrb::{Consumer, Producer, RingBuffer};
+use std::sync::Arc;
+use ringbuf::{ Cons, Prod, HeapRb as RingBuffer, producer::Producer as _ };
+type Producer<T> = Prod<Arc<RingBuffer<T>>>;
+type Consumer<T> = Cons<Arc<RingBuffer<T>>>;
 
 /// Wraps `T` so that when it's dropped, it gets sent
 /// back through a thread channel.
@@ -15,7 +18,10 @@ pub struct SendOnDrop<T> {
 
 impl<T> SendOnDrop<T> {
 	pub fn new(data: T) -> (Self, Consumer<T>) {
-		let (producer, consumer) = RingBuffer::new(1);
+		let buf = Arc::new(RingBuffer::new(1));
+		let producer = Producer::new(buf.clone());
+		let consumer = Consumer::new(buf);
+
 		(
 			Self {
 				data: Some(data),
@@ -43,7 +49,8 @@ impl<T> DerefMut for SendOnDrop<T> {
 impl<T> Drop for SendOnDrop<T> {
 	fn drop(&mut self) {
 		self.producer
-			.push(self.data.take().unwrap())
+			.try_push(self.data.take().unwrap())
+			.ok()
 			.expect("send on drop producer full");
 	}
 }

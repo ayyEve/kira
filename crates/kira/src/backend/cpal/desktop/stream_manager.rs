@@ -13,8 +13,12 @@ use cpal::{
 	traits::{DeviceTrait, HostTrait, StreamTrait},
 	BufferSize, Device, Stream, StreamConfig, StreamError,
 };
-use rtrb::{Consumer, RingBuffer};
 use send_on_drop::SendOnDrop;
+
+use ringbuf::{ Cons, Prod, HeapRb as RingBuffer, producer::Producer as _, consumer::Consumer as _ };
+type Producer<T> = Prod<Arc<RingBuffer<T>>>;
+type Consumer<T> = Cons<Arc<RingBuffer<T>>>;
+
 
 use super::super::Error;
 
@@ -93,7 +97,7 @@ impl StreamManager {
 		} = &mut self.state
 		{
 			// check for device disconnection
-			if let Ok(StreamError::DeviceNotAvailable) = stream_error_consumer.pop() {
+			if let Some(StreamError::DeviceNotAvailable) = stream_error_consumer.try_pop() {
 				self.stop_stream();
 				if let Ok((device, mut config)) = default_device_and_config() {
 					// TODO: gracefully handle errors that occur in this function
@@ -134,7 +138,11 @@ impl StreamManager {
 		self.device_name = device_name;
 		self.sample_rate = sample_rate;
 		let (mut renderer_wrapper, renderer_consumer) = SendOnDrop::new(renderer);
-		let (mut stream_error_producer, stream_error_consumer) = RingBuffer::new(1);
+
+		let rb = Arc::new(RingBuffer::new(1));
+		let mut stream_error_producer = Producer::new(rb.clone());
+		let stream_error_consumer = Consumer::new(rb);
+
 		let channels = config.channels;
 		let stream = device.build_output_stream(
 			config,
@@ -148,7 +156,7 @@ impl StreamManager {
 			},
 			move |error| {
 				stream_error_producer
-					.push(error)
+					.try_push(error)
 					.expect("Stream error producer is full");
 			},
 			None,
@@ -171,7 +179,7 @@ impl StreamManager {
 		{
 			drop(stream);
 			let renderer = renderer_consumer
-				.pop()
+				.try_pop()
 				.expect("Could not retrieve the renderer after dropping a stream");
 			self.state = State::Idle { renderer };
 		} else {

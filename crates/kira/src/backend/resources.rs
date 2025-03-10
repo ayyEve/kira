@@ -18,7 +18,11 @@ use crate::{
 };
 use atomic_arena::{Arena, Controller, Key};
 use listeners::Listeners;
-use rtrb::{Consumer, Producer, RingBuffer};
+
+use std::sync::Arc;
+use ringbuf::{ Cons, Prod, HeapRb as RingBuffer, producer::Producer as _, consumer::Consumer as _, traits::Observer as _ };
+type Producer<T> = Prod<Arc<RingBuffer<T>>>;
+type Consumer<T> = Cons<Arc<RingBuffer<T>>>;
 
 use crate::{clock::Clock, manager::Capacities, modulator::Modulator};
 
@@ -33,8 +37,14 @@ pub(crate) struct ResourceStorage<T> {
 impl<T> ResourceStorage<T> {
 	#[must_use]
 	pub fn new(capacity: usize) -> (Self, ResourceController<T>) {
-		let (new_resource_producer, new_resource_consumer) = RingBuffer::new(capacity);
-		let (unused_resource_producer, unused_resource_consumer) = RingBuffer::new(capacity);
+		let rb1 = Arc::new(RingBuffer::new(capacity));
+		let new_resource_producer = Producer::new(rb1.clone());
+		let	new_resource_consumer = Consumer::new(rb1);
+
+		let rb2 = Arc::new(RingBuffer::new(capacity));
+		let unused_resource_producer = Producer::new(rb2.clone());
+		let unused_resource_consumer = Consumer::new(rb2);
+		
 		let resources = Arena::new(capacity);
 		let arena_controller = resources.controller();
 		(
@@ -54,10 +64,10 @@ impl<T> ResourceStorage<T> {
 	pub fn remove_and_add(&mut self, remove_test: impl FnMut(&T) -> bool) {
 		for (_, resource) in self.resources.drain_filter(remove_test) {
 			self.unused_resource_producer
-				.push(resource)
+				.try_push(resource)
 				.unwrap_or_else(|_| panic!("unused resource producer is full"));
 		}
-		while let Ok((key, resource)) = self.new_resource_consumer.pop() {
+		while let Some((key, resource)) = self.new_resource_consumer.try_pop() {
 			self.resources
 				.insert_with_key(key, resource)
 				.expect("error inserting resource");
@@ -108,8 +118,15 @@ impl<T> SelfReferentialResourceStorage<T> {
 	where
 		T: Default,
 	{
-		let (new_resource_producer, new_resource_consumer) = RingBuffer::new(capacity);
-		let (unused_resource_producer, unused_resource_consumer) = RingBuffer::new(capacity);
+
+		let rb1 = Arc::new(RingBuffer::new(capacity));
+		let new_resource_producer = Producer::new(rb1.clone());
+		let	new_resource_consumer = Consumer::new(rb1);
+
+		let rb2 = Arc::new(RingBuffer::new(capacity));
+		let unused_resource_producer = Producer::new(rb2.clone());
+		let unused_resource_consumer = Consumer::new(rb2);
+
 		let resources = Arena::new(capacity);
 		let arena_controller = resources.controller();
 		(
@@ -130,7 +147,7 @@ impl<T> SelfReferentialResourceStorage<T> {
 
 	pub fn remove_and_add(&mut self, remove_test: impl FnMut(&T) -> bool) {
 		self.remove_unused(remove_test);
-		while let Ok((key, resource)) = self.new_resource_consumer.pop() {
+		while let Some((key, resource)) = self.new_resource_consumer.try_pop() {
 			self.resources
 				.insert_with_key(key, resource)
 				.expect("error inserting resource");
@@ -165,7 +182,7 @@ impl<T> SelfReferentialResourceStorage<T> {
 			if remove_test(resource) {
 				let resource = self.resources.remove(key).unwrap();
 				self.unused_resource_producer
-					.push(resource)
+					.try_push(resource)
 					.unwrap_or_else(|_| panic!("unused resource producer is full"));
 				self.keys.remove(i);
 			} else {
@@ -209,7 +226,7 @@ impl<T> ResourceController<T> {
 		self.new_resource_producer
 			.get_mut()
 			.expect("new resource producer mutex poisoned")
-			.push((key, resource))
+			.try_push((key, resource))
 			.unwrap_or_else(|_| panic!("new resource producer full"));
 	}
 
@@ -218,7 +235,7 @@ impl<T> ResourceController<T> {
 			.unused_resource_consumer
 			.get_mut()
 			.expect("unused resource consumer mutex poisoned");
-		while unused_resource_consumer.pop().is_ok() {}
+		while unused_resource_consumer.try_pop().is_some() {}
 	}
 
 	#[must_use]

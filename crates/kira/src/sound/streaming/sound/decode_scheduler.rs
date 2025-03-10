@@ -11,7 +11,10 @@ use crate::{
 		PlaybackState,
 	},
 };
-use rtrb::{Consumer, Producer, RingBuffer};
+
+use ringbuf::{ Cons, Prod, HeapRb as RingBuffer, producer::Producer as _, traits::Observer as _ };
+type Producer<T> = Prod<Arc<RingBuffer<T>>>;
+type Consumer<T> = Cons<Arc<RingBuffer<T>>>;
 
 use super::{Shared, TimestampedFrame};
 
@@ -47,11 +50,15 @@ impl<Error: Send + 'static> DecodeScheduler<Error> {
 		command_readers: DecodeSchedulerCommandReaders,
 		error_producer: Producer<Error>,
 	) -> Result<(Self, Consumer<TimestampedFrame>), Error> {
-		let (mut frame_producer, frame_consumer) = RingBuffer::new(BUFFER_SIZE);
+
+		let rb = Arc::new(RingBuffer::new(BUFFER_SIZE));
+		let mut frame_producer = Producer::new(rb.clone());
+		let frame_consumer = Consumer::new(rb);
+
 		// pre-seed the frame ringbuffer with a zero frame. this is the "previous" frame
 		// when the sound just started.
 		frame_producer
-			.push(TimestampedFrame {
+			.try_push(TimestampedFrame {
 				frame: Frame::ZERO,
 				index: 0,
 			})
@@ -100,7 +107,7 @@ impl<Error: Send + 'static> DecodeScheduler<Error> {
 					NextStep::End => break,
 				},
 				Err(error) => {
-					self.error_producer.push(error).ok();
+					self.error_producer.try_push(error).ok();
 					self.shared.encountered_error.store(true, Ordering::SeqCst);
 				}
 			}
@@ -129,7 +136,7 @@ impl<Error: Send + 'static> DecodeScheduler<Error> {
 		}
 		let frame = self.frame_at_index(self.transport.position)?;
 		self.frame_producer
-			.push(TimestampedFrame {
+			.try_push(TimestampedFrame {
 				frame,
 				index: self.transport.position,
 			})
